@@ -52,22 +52,36 @@ def extract_song_id(url: str) -> str | None:
     m = SONG_RE.search(url)
     if m:
         return m.group(1)
-    m = UUID_RE.search(url)
-    if m:
-        return m.group(0)
+    if UUID_RE.fullmatch(url.strip()):
+        return url.strip()
     m = SHORT_RE.search(url)
     if m:
         try:
             r = SESSION.get(
                 f"https://suno.com/s/{m.group(1)}",
+                allow_redirects=False,
+                timeout=20,
+            )
+            loc = r.headers.get("Location") or r.headers.get("location") or ""
+            found = SONG_RE.search(loc) or SONG_RE.search(r.url)
+            if found:
+                return found.group(1)
+            # Some shares only resolve when followed once.
+            r2 = SESSION.get(
+                f"https://suno.com/s/{m.group(1)}",
                 allow_redirects=True,
                 timeout=20,
             )
-            found = SONG_RE.search(r.url) or UUID_RE.search(r.url) or UUID_RE.search(r.text or "")
+            found = SONG_RE.search(r2.url)
             if found:
-                return found.group(1) if found.lastindex else found.group(0)
+                return found.group(1)
+            # Do NOT scrape random UUIDs from the homepage.
         except requests.RequestException:
             return None
+        raise ValueError(
+            "Short link suno.com/s/... sekarang butuh buka di browser. "
+            "Copy URL lengkap dari address bar: https://suno.com/song/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        )
     return None
 
 
@@ -79,11 +93,22 @@ def guess_urls(song_id: str) -> dict:
     return {
         "mp3": f"https://cdn1.suno.ai/{song_id}.mp3",
         "m4a": f"https://cdn1.suno.ai/{song_id}.m4a",
+        "mp4": f"https://cdn1.suno.ai/{song_id}.mp4",
         "clip": CLOUDFRONT_AUDIO.format(id=song_id),
         "image": f"https://cdn2.suno.ai/image_{song_id}.jpeg",
         "image_large": f"https://cdn2.suno.ai/image_large_{song_id}.jpeg",
         "page": f"https://suno.com/song/{song_id}",
     }
+
+
+def looks_like_media(data: bytes) -> bool:
+    if not data or len(data) < 32:
+        return False
+    if data[4:8] == b"ftyp" or data[:3] == b"ID3" or data[:4] == b"RIFF" or data[:4] == b"OggS":
+        return True
+    if data[:2] == b"\xff\xfb" or data[:2] == b"\xff\xf3" or data[:2] == b"\xff\xfa":
+        return True
+    return False
 
 
 def is_playable_audio(url: str | None) -> bool:
@@ -175,18 +200,20 @@ def resolve_track(url: str) -> dict:
     guessed = guess_urls(song_id)
     scraped = scrape_page(guessed["page"], song_id)
 
-    audio = scraped.get("audio_url") if is_playable_audio(scraped.get("audio_url")) else None
+    # CloudFront "m4a-opus" is not a real MP4 (no ftyp) — ffmpeg/browser reject it.
+    # Playable source is the public MP4 on cdn1.suno.ai.
+    video = guessed["mp4"] if head_ok(guessed["mp4"]) else None
+    audio = None
+    for candidate in (guessed["mp3"], guessed["m4a"], video):
+        if candidate and head_ok(candidate):
+            audio = candidate
+            break
     if not audio:
-        for candidate in (guessed["clip"], guessed["mp3"], guessed["m4a"]):
-            if head_ok(candidate):
-                audio = candidate
-                break
-    if not audio:
-        audio = guessed["clip"]
+        audio = video or guessed["mp4"]
 
     image = scraped.get("image_url") or guessed["image_large"]
     title = scraped.get("title") or f"Suno Track {song_id[:8]}"
-    if title.lower() in {"get the full app experience", "suno"}:
+    if title.lower() in {"get the full app experience", "suno", "suno | ai music generator"}:
         title = f"Suno Track {song_id[:8]}"
     creator = scraped.get("creator") or "Suno Creator"
     tags = scraped.get("tags") or ""
@@ -199,6 +226,7 @@ def resolve_track(url: str) -> dict:
         "tags": tags,
         "image_url": image,
         "audio_url": audio,
+        "video_url": video or guessed["mp4"],
         "canonical_url": guessed["page"],
     }
 
@@ -211,6 +239,8 @@ def download_bytes(url: str) -> bytes:
     ctype = (r.headers.get("Content-Type") or "").lower()
     if "text/html" in ctype or "text/xml" in ctype or len(r.content) < 2000:
         raise RuntimeError("CDN menolak file audio (403/HTML). Coba lagu publik lain.")
+    if not looks_like_media(r.content):
+        raise RuntimeError("File dari CDN bukan media yang bisa di-decode. Pakai URL MP4 cdn1.suno.ai.")
     return r.content
 
 
@@ -221,14 +251,14 @@ def _ffmpeg(inp: Path, out: Path, extra: list[str]) -> subprocess.CompletedProce
 
 def transcode(src: bytes, fmt: str) -> tuple[bytes, str]:
     fmt = fmt.lower()
-    if fmt == "m4a":
-        return src, "audio/mp4"
-
     with tempfile.TemporaryDirectory() as td:
         inp = Path(td) / "in.bin"
         inp.write_bytes(src)
         attempts: list[tuple[str, list[str], str]] = []
-        if fmt == "wav":
+        if fmt == "m4a":
+            attempts.append(("m4a", ["-c:a", "aac", "-b:a", "192k"], "audio/mp4"))
+            attempts.append(("m4a", ["-c:a", "copy"], "audio/mp4"))
+        elif fmt == "wav":
             attempts.append(("wav", ["-c:a", "pcm_s16le"], "audio/wav"))
         elif fmt == "aac":
             attempts.append(("m4a", ["-c:a", "aac", "-b:a", "192k"], "audio/mp4"))

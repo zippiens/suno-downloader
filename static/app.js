@@ -49,9 +49,10 @@ form.addEventListener("submit", async (e) => {
     const json = await res.json();
     if (!res.ok || !json.success) throw new Error(json.detail || "Gagal ambil info lagu.");
     currentSongData = json.data;
-    if (!currentSongData.audio_url && currentSongData.id) {
-      currentSongData.audio_url = cloudfrontUrl(currentSongData.id);
+    if (!currentSongData.video_url && currentSongData.id) {
+      currentSongData.video_url = `https://cdn1.suno.ai/${currentSongData.id}.mp4`;
     }
+    if (!currentSongData.audio_url) currentSongData.audio_url = currentSongData.video_url;
     renderSongPreview(currentSongData);
     showAlert("Track berhasil dimuat. Preview diputar langsung dari CDN Suno.", "ok");
   } catch (err) {
@@ -74,13 +75,18 @@ function renderSongPreview(song) {
     songTags.style.display = "none";
   }
 
-  // File asli Suno = Opus di dalam M4A, browser tidak bisa play.
-  const qs = new URLSearchParams({
-    url: song.canonical_url || "",
-    audio_url: song.audio_url || "",
-  });
-  audioPlayer.src = "/api/stream?" + qs.toString();
+  // MP4 publik bisa diputar langsung. Stream "m4a-opus" CloudFront tidak.
+  const playUrl = song.video_url || song.audio_url || "";
+  audioPlayer.src = playUrl;
   audioPlayer.load();
+  audioPlayer.addEventListener("error", () => {
+    const qs = new URLSearchParams({
+      url: song.canonical_url || "",
+      audio_url: playUrl,
+    });
+    audioPlayer.src = "/api/stream?" + qs.toString();
+    audioPlayer.load();
+  }, { once: true });
 
   resultCard.classList.add("show");
   resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -97,14 +103,21 @@ function saveBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(href), 2000);
 }
 
+function mediaUrl(song) {
+  return song.video_url || song.audio_url || (song.id ? `https://cdn1.suno.ai/${song.id}.mp4` : "");
+}
+
 async function fetchDirectAudio(song) {
-  const url = song.audio_url || (song.id ? cloudfrontUrl(song.id) : "");
+  const url = mediaUrl(song);
   if (!url) throw new Error("Audio URL kosong.");
-  const res = await fetch(url, { mode: "cors" });
-  if (!res.ok) throw new Error("CDN audio HTTP " + res.status);
-  const buf = await res.arrayBuffer();
-  if (buf.byteLength < 2000) throw new Error("File audio terlalu kecil / diblokir.");
-  return buf;
+  const res = await fetch("/api/download?" + new URLSearchParams({
+    url: song.canonical_url || "",
+    audio_url: url,
+    title: song.title || "suno-track",
+    format: "m4a",
+  }));
+  if (!res.ok) throw new Error("Server download HTTP " + res.status);
+  return await res.arrayBuffer();
 }
 
 async function triggerDownload(format) {
@@ -123,7 +136,7 @@ async function triggerDownload(format) {
     // Coba konversi di server. Kalau gagal, tetap kasih file original.
     const qs = new URLSearchParams({
       url: song.canonical_url || "",
-      audio_url: song.audio_url || "",
+      audio_url: mediaUrl(song),
       title: song.title || name,
       format,
     });
