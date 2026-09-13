@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Suno Stealth Downloader — local/self-hosted clone."""
+"""Suno Piens Downloader — local/self-hosted clone."""
 
 from __future__ import annotations
 
