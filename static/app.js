@@ -152,3 +152,26 @@ async function triggerDownload(format) {
 }
 
 window.triggerDownload = triggerDownload;
+
+document.addEventListener("contextmenu", (e) => {
+  if (e.target && (e.target.id === "urlInput" || e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+  e.preventDefault();
+});
+
+document.addEventListener("keydown", (e) => {
+  const key = (e.key || "").toUpperCase();
+  if (e.key === "F12" || e.keyCode === 123) {
+    e.preventDefault();
+    return;
+  }
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && e.shiftKey && ["I", "J", "C"].includes(key)) e.preventDefault();
+  if (ctrl && ["U", "S", "P"].includes(key)) e.preventDefault();
+});
+
+document.addEventListener("dragstart", (e) => e.preventDefault());
+document.addEventListener("copy", (e) => {
+  if (e.target && (e.target.id === "urlInput" || e.target.tagName === "INPUT")) return;
+  e.preventDefault();
+});
+
