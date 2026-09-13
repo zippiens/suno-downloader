@@ -26,8 +26,10 @@ SESSION.headers.update(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         ),
-        "Accept": "application/json, text/html, */*",
+        "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://suno.com/",
+        "Origin": "https://suno.com",
     }
 )
 
@@ -278,27 +280,34 @@ def api_stream():
 def api_download():
     url = request.args.get("url", "")
     fmt = (request.args.get("format") or "mp3").lower()
+    audio_url = request.args.get("audio_url", "")
+    title = request.args.get("title", "")
     try:
-        track = resolve_track(url)
-        raw = download_bytes(track["audio_url"])
-        if fmt == "m4a" and track["audio_url"].endswith(".mp3"):
-            # original stream is already mp3 on many tracks; still wrap as-is
-            body, mime = raw, "audio/mpeg"
-            ext = "mp3"
+        if audio_url and is_playable_audio(audio_url):
+            raw = download_bytes(audio_url)
+            filename_base = safe_filename(title or "suno-track")
         else:
-            body, mime = transcode(raw, fmt)
-            ext = fmt
-        filename = f"{track['safe_title']}.{ext}"
+            track = resolve_track(url)
+            raw = download_bytes(track["audio_url"])
+            filename_base = track["safe_title"]
+        body, mime = transcode(raw, fmt)
         return send_file(
             io.BytesIO(body),
             mimetype=mime,
             as_attachment=True,
-            download_name=filename,
+            download_name=f"{filename_base}.{fmt}",
         )
     except ValueError as e:
         return jsonify({"success": False, "detail": str(e)}), 400
     except Exception as e:
         return jsonify({"success": False, "detail": f"Download gagal: {e}"}), 502
+
+
+@app.after_request
+def add_cors(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
 
 
 if __name__ == "__main__":
