@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Suno Stealth Downloader</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <nav class="nav">
+      <div class="brand">
+        <div class="logo">↓</div>
+        <div>
+          <h1>Suno Stealth Downloader</h1>
+          <small>SELF-HOSTED</small>
+        </div>
+      </div>
+      <div class="pill">● Online & Ready</div>
+    </nav>
+
+    <section class="hero">
+      <div class="badge">✨ Compatible with public Suno song links</div>
+      <h2>Download <span>Suno AI Music</span> for Free</h2>
+      <p>Simpan lagu Suno publik ke MP3 320kbps, WAV lossless, atau stream original. Tanpa login.</p>
+      <form id="downloadForm" class="box">
+        <input id="urlInput" type="url" placeholder="Paste Suno song URL (suno.com/song/... atau suno.com/s/...)" required />
+        <button type="button" class="btn btn-ghost" id="pasteBtn">Paste</button>
+        <button type="submit" class="btn btn-main" id="fetchBtn">Fetch Track</button>
+      </form>
+      <div id="alertBox" class="alert"></div>
+    </section>
+
+    <section id="resultCard" class="result card">
+      <div class="result-inner">
+        <img id="coverImg" alt="cover" />
+        <div class="meta">
+          <h3 id="songTitle">Title</h3>
+          <p class="by" id="songCreator">By:</p>
+          <div class="tags" id="songTags"></div>
+          <audio id="audioPlayer" controls></audio>
+          <div class="formats">
+            <button class="fmt" onclick="triggerDownload('mp3')"><b>Download MP3</b><span>320 kbps</span></button>
+            <button class="fmt" onclick="triggerDownload('wav')"><b>Download WAV</b><span>Lossless PCM 16-bit</span></button>
+            <button class="fmt" onclick="triggerDownload('m4a')"><b>Download original</b><span>Stream asli</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card"><div class="ico">⚡</div><h3>Fast transcoding</h3><p>Konversi lewat FFmpeg di server kamu sendiri, tanpa antrean.</p></article>
+      <article class="card"><div class="ico">♪</div><h3>Audio fidelity</h3><p>MP3 320kbps, WAV 16-bit, atau file original dari CDN publik Suno.</p></article>
+      <article class="card"><div class="ico">🔒</div><h3>Self-hosted</h3><p>Tidak perlu akun. Hanya lagu yang memang dipublikasikan.</p></article>
+    </section>
+
+    <section class="how">
+      <h2>How to Get a Suno Song Link</h2>
+      <div class="how-grid">
+        <article class="card">
+          <small>METHOD 1</small>
+          <h3>Browser Address Bar</h3>
+          <p>Buka lagu di suno.com, salin URL address bar (contoh https://suno.com/song/xxx).</p>
+        </article>
+        <article class="card">
+          <small>METHOD 2</small>
+          <h3>Share Button</h3>
+          <p>Klik titik tiga / Share, lalu Copy Link (contoh https://suno.com/s/xxx).</p>
+        </article>
+      </div>
+    </section>
+    <p class="note">Hanya unduh konten yang kamu punya haknya. Hormati ToS Suno dan lisensi kreator. Tool ini tidak menembus lagu privat.</p>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
