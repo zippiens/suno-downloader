@@ -69,14 +69,28 @@ def extract_song_id(url: str) -> str | None:
     return None
 
 
+CLOUDFRONT_AUDIO = "https://d2lwuy8qc234o3.cloudfront.net/1/clip/{id}.m4a"
+BAD_AUDIO = ("forbidden", "studio-api.prod.suno.com")
+
+
 def guess_urls(song_id: str) -> dict:
     return {
         "mp3": f"https://cdn1.suno.ai/{song_id}.mp3",
         "m4a": f"https://cdn1.suno.ai/{song_id}.m4a",
+        "clip": CLOUDFRONT_AUDIO.format(id=song_id),
         "image": f"https://cdn2.suno.ai/image_{song_id}.jpeg",
         "image_large": f"https://cdn2.suno.ai/image_large_{song_id}.jpeg",
         "page": f"https://suno.com/song/{song_id}",
     }
+
+
+def is_playable_audio(url: str | None) -> bool:
+    if not url:
+        return False
+    low = url.lower()
+    if any(b in low for b in BAD_AUDIO):
+        return False
+    return low.startswith("http")
 
 
 def head_ok(url: str) -> bool:
@@ -106,36 +120,48 @@ def fetch_oembed(page_url: str) -> dict:
     return {}
 
 
-def scrape_page(page_url: str) -> dict:
+def scrape_page(page_url: str, song_id: str) -> dict:
     data: dict = {}
     try:
-        r = SESSION.get(page_url, timeout=20)
+        r = SESSION.get(page_url, timeout=20, allow_redirects=True)
         text = r.text or ""
     except requests.RequestException:
         return data
 
-    def grab(key: str) -> str | None:
-        pat = rf'\\"{key}\\"\s*:\s*\\"(.*?)\\"'
-        m = re.search(pat, text)
-        if m:
-            return m.group(1).encode("utf-8").decode("unicode_escape")
-        pat2 = rf'"{key}"\s*:\s*"(.*?)"'
-        m = re.search(pat2, text)
-        return m.group(1) if m else None
+    og_title = re.search(r'property="og:title" content="([^"]+)"', text)
+    if og_title:
+        data["title"] = og_title.group(1)
+    og_image = re.search(r'property="og:image" content="([^"]+)"', text)
+    if og_image:
+        data["image_url"] = og_image.group(1)
 
-    for key in ("title", "display_name", "handle", "tags", "prompt", "audio_url", "image_url"):
-        val = grab(key)
-        if val:
-            data[key] = val
-    m = re.search(r'og:title" content="([^"]+)"', text)
-    if m and "title" not in data:
-        data["title"] = m.group(1)
-    m = re.search(r'og:image" content="([^"]+)"', text)
-    if m and "image_url" not in data:
-        data["image_url"] = m.group(1)
-    m = re.search(r'(https://cdn[^"\\]+' + re.escape(extract_song_id(page_url) or "") + r'[^"\\]*)', text)
-    if m and "audio_url" not in data:
-        data["audio_url"] = m.group(1).replace("\\u0026", "&")
+    # Real stream is in media_urls[], audio_url is often a "forbidden" stub now.
+    media = re.findall(
+        rf'https://d2lwuy8qc234o3\.cloudfront\.net/[^"\\]*{re.escape(song_id)}[^"\\]*',
+        text,
+    )
+    media += re.findall(
+        rf'https://cdn1\.suno\.ai/{re.escape(song_id)}\.(?:mp3|m4a)',
+        text,
+    )
+    for u in media:
+        if is_playable_audio(u):
+            data["audio_url"] = u
+            break
+
+    sid_idx = text.find(song_id)
+    window = text[max(0, sid_idx - 500) : sid_idx + 4000] if sid_idx >= 0 else text
+    tags = re.search(r'"tags"\s*:\s*"([^"]*)"', window)
+    if tags:
+        data["tags"] = tags.group(1)
+    handle = re.search(r'"(?:display_name|handle)"\s*:\s*"([^"]+)"', window)
+    if handle:
+        data["creator"] = handle.group(1)
+    title2 = re.search(r'"title"\s*:\s*"([^"]+)"', window)
+    if title2 and "title" not in data:
+        t = title2.group(1)
+        if t.lower() not in {"suno", "get the full app experience"}:
+            data["title"] = t
     return data
 
 
@@ -145,30 +171,22 @@ def resolve_track(url: str) -> dict:
         raise ValueError("Link Suno tidak valid. Pakai suno.com/song/... atau suno.com/s/...")
 
     guessed = guess_urls(song_id)
-    oembed = fetch_oembed(guessed["page"])
-    scraped = scrape_page(guessed["page"])
+    scraped = scrape_page(guessed["page"], song_id)
 
-    audio = scraped.get("audio_url")
+    audio = scraped.get("audio_url") if is_playable_audio(scraped.get("audio_url")) else None
     if not audio:
-        if head_ok(guessed["mp3"]):
-            audio = guessed["mp3"]
-        elif head_ok(guessed["m4a"]):
-            audio = guessed["m4a"]
-        else:
-            audio = guessed["mp3"]
+        for candidate in (guessed["clip"], guessed["mp3"], guessed["m4a"]):
+            if head_ok(candidate):
+                audio = candidate
+                break
+    if not audio:
+        audio = guessed["clip"]
 
-    image = (
-        scraped.get("image_url")
-        or oembed.get("thumbnail_url")
-        or guessed["image_large"]
-    )
-    title = scraped.get("title") or oembed.get("title") or f"Suno Track {song_id[:8]}"
-    creator = (
-        scraped.get("display_name")
-        or scraped.get("handle")
-        or oembed.get("author_name")
-        or "Suno Creator"
-    )
+    image = scraped.get("image_url") or guessed["image_large"]
+    title = scraped.get("title") or f"Suno Track {song_id[:8]}"
+    if title.lower() in {"get the full app experience", "suno"}:
+        title = f"Suno Track {song_id[:8]}"
+    creator = scraped.get("creator") or "Suno Creator"
     tags = scraped.get("tags") or ""
 
     return {
@@ -184,8 +202,13 @@ def resolve_track(url: str) -> dict:
 
 
 def download_bytes(url: str) -> bytes:
-    r = SESSION.get(url, timeout=60)
+    if not is_playable_audio(url):
+        raise RuntimeError("Audio URL tidak valid / diblokir Suno")
+    r = SESSION.get(url, timeout=90)
     r.raise_for_status()
+    ctype = (r.headers.get("Content-Type") or "").lower()
+    if "text/html" in ctype or "text/xml" in ctype or len(r.content) < 2000:
+        raise RuntimeError("CDN menolak file audio (403/HTML). Coba lagu publik lain.")
     return r.content
 
 
