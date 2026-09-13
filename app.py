@@ -214,29 +214,40 @@ def download_bytes(url: str) -> bytes:
     return r.content
 
 
+def _ffmpeg(inp: Path, out: Path, extra: list[str]) -> subprocess.CompletedProcess:
+    cmd = ["ffmpeg", "-hide_banner", "-y", "-i", str(inp), "-vn", *extra, str(out)]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
 def transcode(src: bytes, fmt: str) -> tuple[bytes, str]:
     fmt = fmt.lower()
     if fmt == "m4a":
         return src, "audio/mp4"
-    if fmt not in {"mp3", "wav"}:
-        raise ValueError("Format harus mp3, wav, atau m4a")
 
-    suffix_in = ".bin"
     with tempfile.TemporaryDirectory() as td:
-        inp = Path(td) / f"in{suffix_in}"
-        out = Path(td) / f"out.{fmt}"
+        inp = Path(td) / "in.bin"
         inp.write_bytes(src)
-        cmd = ["ffmpeg", "-y", "-i", str(inp), "-vn"]
-        if fmt == "mp3":
-            cmd += ["-codec:a", "libmp3lame", "-b:a", "320k"]
+        attempts: list[tuple[str, list[str], str]] = []
+        if fmt == "wav":
+            attempts.append(("wav", ["-c:a", "pcm_s16le"], "audio/wav"))
+        elif fmt == "aac":
+            attempts.append(("m4a", ["-c:a", "aac", "-b:a", "192k"], "audio/mp4"))
+            attempts.append(("wav", ["-c:a", "pcm_s16le"], "audio/wav"))
+        elif fmt == "mp3":
+            attempts.append(("mp3", ["-c:a", "libmp3lame", "-b:a", "320k"], "audio/mpeg"))
+            attempts.append(("mp3", ["-c:a", "mp3", "-b:a", "192k"], "audio/mpeg"))
+            attempts.append(("wav", ["-c:a", "pcm_s16le"], "audio/wav"))
         else:
-            cmd += ["-codec:a", "pcm_s16le"]
-        cmd += [str(out)]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0 or not out.exists():
-            raise RuntimeError(proc.stderr[-800:] or "ffmpeg gagal")
-        mime = "audio/mpeg" if fmt == "mp3" else "audio/wav"
-        return out.read_bytes(), mime
+            raise ValueError("Format harus mp3, wav, atau m4a")
+
+        last_err = "ffmpeg gagal"
+        for ext, extra, mime in attempts:
+            out = Path(td) / f"out.{ext}"
+            proc = _ffmpeg(inp, out, extra)
+            if proc.returncode == 0 and out.exists() and out.stat().st_size > 1000:
+                return out.read_bytes(), mime
+            last_err = (proc.stderr or proc.stdout or last_err)[-500:]
+        raise RuntimeError(last_err)
 
 
 @app.get("/")
@@ -263,17 +274,28 @@ def api_info():
 
 @app.get("/api/stream")
 def api_stream():
+    """Browser cannot play Suno's Opus-in-M4A. Transcode to AAC for preview."""
     url = request.args.get("url", "")
+    audio_url = request.args.get("audio_url", "")
     try:
-        track = resolve_track(url)
-        r = SESSION.get(track["audio_url"], stream=True, timeout=60)
-        r.raise_for_status()
-        return Response(
-            r.iter_content(64 * 1024),
-            content_type=r.headers.get("Content-Type", "audio/mpeg"),
-        )
-    except Exception as e:
-        return jsonify({"success": False, "detail": str(e)}), 502
+        if audio_url and is_playable_audio(audio_url):
+            raw = download_bytes(audio_url)
+        else:
+            raw = download_bytes(resolve_track(url)["audio_url"])
+        body, mime = transcode(raw, "aac")
+        return Response(body, content_type=mime)
+    except Exception:
+        try:
+            track = resolve_track(url) if url else None
+            src = audio_url or (track["audio_url"] if track else "")
+            r = SESSION.get(src, stream=True, timeout=60)
+            r.raise_for_status()
+            return Response(
+                r.iter_content(64 * 1024),
+                content_type=r.headers.get("Content-Type", "audio/mp4"),
+            )
+        except Exception as e:
+            return jsonify({"success": False, "detail": str(e)}), 502
 
 
 @app.get("/api/download")

@@ -74,15 +74,13 @@ function renderSongPreview(song) {
     songTags.style.display = "none";
   }
 
-  const direct = song.audio_url || (song.id ? cloudfrontUrl(song.id) : "");
-  audioPlayer.src = direct;
+  // File asli Suno = Opus di dalam M4A, browser tidak bisa play.
+  const qs = new URLSearchParams({
+    url: song.canonical_url || "",
+    audio_url: song.audio_url || "",
+  });
+  audioPlayer.src = "/api/stream?" + qs.toString();
   audioPlayer.load();
-  audioPlayer.addEventListener("error", () => {
-    if (song.canonical_url && audioPlayer.src.indexOf("/api/stream") === -1) {
-      audioPlayer.src = `/api/stream?url=${encodeURIComponent(song.canonical_url)}`;
-      audioPlayer.load();
-    }
-  }, { once: true });
 
   resultCard.classList.add("show");
   resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
