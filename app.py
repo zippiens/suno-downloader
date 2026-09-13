@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import os
 import re
@@ -12,6 +14,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import requests
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
 ROOT = Path(__file__).resolve().parent
@@ -208,9 +211,11 @@ def resolve_track(url: str) -> dict:
         if candidate and head_ok(candidate):
             audio = candidate
             break
+    if not audio and head_ok(guessed["clip"]):
+        audio = guessed["clip"]
     public_file = bool(audio or video)
     if not audio:
-        audio = video
+        audio = video or guessed["clip"]
 
     image = scraped.get("image_url") or guessed["image_large"]
     title = scraped.get("title") or f"Suno Track {song_id[:8]}"
@@ -234,6 +239,39 @@ def resolve_track(url: str) -> dict:
     }
 
 
+def mango_rights(clip_id: str) -> dict:
+    r = SESSION.post(
+        "https://studio-api.prod.suno.com/api/mango/rights",
+        json={"content_params": {"content_id": clip_id, "content_type": "clip"}},
+        timeout=20,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _unwrap_mango(wrapped_b64: str, clip_id: str, user_key: bytes) -> bytes:
+    w = base64.b64decode(wrapped_b64)
+    nonce, ct, tag = w[:12], w[12:-16], w[-16:]
+    dec = Cipher(algorithms.AES(user_key), modes.GCM(nonce, tag)).decryptor()
+    dec.authenticate_additional_data(clip_id.encode())
+    return dec.update(ct) + dec.finalize()
+
+
+def decrypt_mango(data: bytes, clip_id: str) -> bytes:
+    rights = mango_rights(clip_id)
+    user_key = hashlib.sha256(rights["glt"].encode()).digest()
+    key = _unwrap_mango(rights["key"], clip_id, user_key)
+    counter = _unwrap_mango(rights["iv"], clip_id, user_key)
+    iv = (counter[:16] if len(counter) >= 16 else counter.ljust(16, b"\x00"))
+    dec = Cipher(algorithms.AES(key[:16]), modes.CTR(iv)).decryptor()
+    return dec.update(data) + dec.finalize()
+
+
+def clip_id_from_url(url: str) -> str | None:
+    m = UUID_RE.search(url or "")
+    return m.group(0) if m else None
+
+
 def download_bytes(url: str) -> bytes:
     if not is_playable_audio(url):
         raise RuntimeError("Audio URL tidak valid / diblokir Suno")
@@ -242,9 +280,16 @@ def download_bytes(url: str) -> bytes:
     ctype = (r.headers.get("Content-Type") or "").lower()
     if "text/html" in ctype or "text/xml" in ctype or len(r.content) < 2000:
         raise RuntimeError("CDN menolak file audio (403/HTML). Coba lagu publik lain.")
-    if not looks_like_media(r.content):
-        raise RuntimeError("File dari CDN bukan media yang bisa di-decode. Pakai URL MP4 cdn1.suno.ai.")
-    return r.content
+    data = r.content
+    if looks_like_media(data):
+        return data
+    cid = clip_id_from_url(url)
+    if not cid:
+        raise RuntimeError("File terenkripsi dan clip id tidak ketemu.")
+    plain = decrypt_mango(data, cid)
+    if not looks_like_media(plain):
+        raise RuntimeError("Dekripsi stream gagal.")
+    return plain
 
 
 def _ffmpeg(inp: Path, out: Path, extra: list[str]) -> subprocess.CompletedProcess:

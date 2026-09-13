@@ -49,16 +49,8 @@ form.addEventListener("submit", async (e) => {
     const json = await res.json();
     if (!res.ok || !json.success) throw new Error(json.detail || "Gagal ambil info lagu.");
     currentSongData = json.data;
-    if (!currentSongData.video_url && currentSongData.id) {
-      currentSongData.video_url = `https://cdn1.suno.ai/${currentSongData.id}.mp4`;
-    }
-    if (!currentSongData.audio_url) currentSongData.audio_url = currentSongData.video_url;
     renderSongPreview(currentSongData);
-    if (currentSongData.public_file === false || currentSongData.visibility === "link-only") {
-      showAlert("Lagu ini Link Only / belum dipublish. File MP4 publik dikunci Suno. Unduh dari Library Suno (tombol Download resmi) atau Publish dulu.", "err");
-    } else {
-      showAlert("Track berhasil dimuat.", "ok");
-    }
+    showAlert("Track berhasil dimuat.", "ok");
   } catch (err) {
     showAlert(err.message, "err");
     resultCard.classList.remove("show");
@@ -79,18 +71,12 @@ function renderSongPreview(song) {
     songTags.style.display = "none";
   }
 
-  // MP4 publik bisa diputar langsung. Stream "m4a-opus" CloudFront tidak.
-  const playUrl = song.video_url || song.audio_url || "";
-  audioPlayer.src = playUrl;
+  const qs = new URLSearchParams({
+    url: song.canonical_url || "",
+    audio_url: song.audio_url || song.video_url || "",
+  });
+  audioPlayer.src = "/api/stream?" + qs.toString();
   audioPlayer.load();
-  audioPlayer.addEventListener("error", () => {
-    const qs = new URLSearchParams({
-      url: song.canonical_url || "",
-      audio_url: playUrl,
-    });
-    audioPlayer.src = "/api/stream?" + qs.toString();
-    audioPlayer.load();
-  }, { once: true });
 
   resultCard.classList.add("show");
   resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
