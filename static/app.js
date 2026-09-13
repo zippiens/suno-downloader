@@ -54,7 +54,11 @@ form.addEventListener("submit", async (e) => {
     }
     if (!currentSongData.audio_url) currentSongData.audio_url = currentSongData.video_url;
     renderSongPreview(currentSongData);
-    showAlert("Track berhasil dimuat. Preview diputar langsung dari CDN Suno.", "ok");
+    if (currentSongData.public_file === false || currentSongData.visibility === "link-only") {
+      showAlert("Lagu ini Link Only / belum dipublish. File MP4 publik dikunci Suno. Unduh dari Library Suno (tombol Download resmi) atau Publish dulu.", "err");
+    } else {
+      showAlert("Track berhasil dimuat.", "ok");
+    }
   } catch (err) {
     showAlert(err.message, "err");
     resultCard.classList.remove("show");

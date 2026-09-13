@@ -38,7 +38,7 @@ UUID_RE = re.compile(
     re.I,
 )
 SHORT_RE = re.compile(r"suno\.com/s/([A-Za-z0-9_-]+)", re.I)
-SONG_RE = re.compile(r"suno\.com/(?:song|hook)/([0-9a-f-]{36})", re.I)
+SONG_RE = re.compile(r"(?:suno\.com)?/(?:song|hook)/([0-9a-f-]{36})", re.I)
 
 
 def safe_filename(name: str) -> str:
@@ -208,8 +208,9 @@ def resolve_track(url: str) -> dict:
         if candidate and head_ok(candidate):
             audio = candidate
             break
+    public_file = bool(audio or video)
     if not audio:
-        audio = video or guessed["mp4"]
+        audio = video
 
     image = scraped.get("image_url") or guessed["image_large"]
     title = scraped.get("title") or f"Suno Track {song_id[:8]}"
@@ -226,8 +227,10 @@ def resolve_track(url: str) -> dict:
         "tags": tags,
         "image_url": image,
         "audio_url": audio,
-        "video_url": video or guessed["mp4"],
+        "video_url": video,
         "canonical_url": guessed["page"],
+        "public_file": public_file,
+        "visibility": "public" if public_file else "link-only",
     }
 
 
